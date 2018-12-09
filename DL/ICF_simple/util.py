@@ -26,7 +26,7 @@ def make_param(shape):
 
 def _log(*args):
     if _log.on:
-        print " ".join(map(str,args))
+        print(" ".join(map(str,args)))
 _log.on = True
 
 
@@ -64,13 +64,13 @@ class BlockType:
             def f(model):
                 try:
                     return make_block(model, name, **kwargs)
-                except Exception,e:
-                    print 'Block was created:'
-                    print tb
+                except Exception as e:
+                    print('Block was created:')
+                    print(tb)
                     traceback.print_exc()
                     raise e
             return f
-        meta_make_block.func_doc = f.func_doc
+        #meta_make_block.func_doc = f.func_doc
         return meta_make_block
 
 class Block:
@@ -154,6 +154,8 @@ def fc(name='fclayer', input='input', nout=128, act=T.tanh, block=None):
     act -- the activation function
     """
     nin = input.output_shape[1]
+    nin = int(nin)
+    nout = int(nout)
     W = block.param((nin, nout))
     b = block.param((nout,))
     W.name += name; b.name += name;
@@ -166,6 +168,8 @@ def fc(name='fclayer', input='input', nout=128, act=T.tanh, block=None):
 @BlockType()
 def conv(name='conv',input='input', nout=32, fs=5, act=T.nnet.relu, stride=(1,1),block=None):
     nin = input.output_shape[1]
+    nin = int(nin)
+    nout = int(nout)
     W = block.param((nout, nin, fs, fs))
     b = block.param((nout,))
     W.name += name; b.name += name;
@@ -184,6 +188,8 @@ def conv(name='conv',input='input', nout=32, fs=5, act=T.nnet.relu, stride=(1,1)
 @BlockType()
 def conv_transpose(name='convT',input='input', nout=32, fs=5, act=T.tanh, stride=(1,1),block=None):
     nin = input.output_shape[1]
+    nin = int(nin)
+    nout = int(nout)
     W = block.param((nin, nout, fs, fs))
     b = block.param((nout,))
     W.name += name; b.name += name;
@@ -318,9 +324,9 @@ def example():
     # for example the `fc` block has two outputs, 'output' and 'preact' (before the activation)
     preact = forward_pass['fc2.preact']
     # pred is a theano Softmax.0, while preact is `T.dot(x,W) + b`, which is a theano Elemwise{add}.0
-    print pred, preact 
+    print(pred, preact)
 
-    print forward_pass['test']
+    print(forward_pass['test'])
     
 if __name__ == '__main__':
     example()
