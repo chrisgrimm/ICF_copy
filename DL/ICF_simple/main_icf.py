@@ -20,6 +20,8 @@ class Squares:
         self.nsquares = nsquares
         self.size = size # size of the observation
         self.side = side # size of squares
+        self.num_channels = 1
+
     @property
     def nactions(self):
         return 4
@@ -52,6 +54,8 @@ class Sokoban:
         self.env = BlockPushingDomain(observation_mode='image', configuration='standard')
         self.nsquares = 1
         self.size = 64
+        self.num_channels = 3
+        self.nactions = 4
 
     def get_agent_pos(self):
         agent = [x for x in self.env.get_current_state()['blocks'] if isinstance(x, AgentBlock)][0]
@@ -61,7 +65,7 @@ class Sokoban:
         random_action = np.random.randint(0, 4) # the 5th action is a no-op, for simplicity let's remove this.
         s = self.env.reset()
         pos = self.get_agent_pos()
-        sp = self.env.step(random_action)
+        sp, r, t, info = self.env.step(random_action)
         pos_p = self.get_agent_pos()
         return s.flatten() / 255., random_action, sp.flatten() / 255., pos, pos_p
 
@@ -70,9 +74,10 @@ class Sokoban:
 
 def main():
 
-    env = Squares(1,12,2) 
+    #env = Squares(1,12,2)
+    env = Sokoban()
     N_latent = 6 # number of latent ICF
-    convn = [16,16] # number of hidden conv channels
+    convn = [16,16,16] # number of hidden conv channels
     convfs = 3 # filter size
     nhid = 32 # number of fc hidden
     rec_factor = 0.1 # factor of the reconstruction loss
@@ -80,19 +85,22 @@ def main():
     
     model = Model()
     model.build([
-        placeholder('s_t', shape=(None, env.size**2)),
+        placeholder('s_t', shape=(None, env.size**2 * env.num_channels)),
 
         # encoder
-        flat2image('s_t_image', input='s_t', shape=(1,env.size,env.size)),
-        conv('conv1', input='s_t_image', nout=convn[0], fs=convfs, act=T.nnet.relu, stride=(1,1)),
-        conv('conv2', input='conv1',     nout=convn[1], fs=convfs, act=T.nnet.relu, stride=(1,1)),
-        image2flat('conv2_flat', input='conv2'),
-        fc('h1', input='conv2_flat', nout=nhid, act=T.nnet.relu),
+        flat2image('s_t_image', input='s_t', shape=(env.num_channels, env.size,env.size)),
+        conv('conv1', input='s_t_image', nout=convn[0], fs=convfs, act=T.nnet.relu, stride=(2,2)), # 32 x 32
+        conv('conv2', input='conv1',     nout=convn[1], fs=convfs, act=T.nnet.relu, stride=(2,2)), # 16 x 16
+        conv('conv3', input='conv2', nout=convn[2], fs=convfs, act=T.nnet.relu, stride=(2, 2)),  # 8 x 8
+
+        image2flat('conv3_flat', input='conv3'),
+        fc('h1', input='conv3_flat', nout=nhid, act=T.nnet.relu),
         fc('h', input='h1', nout=N_latent, act=T.tanh),
 
         # decoder
-        conv_transpose('convT2', input='conv2', nout=convn[0], fs=convfs,act=T.nnet.relu,stride=(1,1)),
-        conv_transpose('convT1', input='convT2', nout=1, fs=convfs,act=lambda x:x,stride=(1,1)),
+        conv_transpose('convT3', input='conv3', nout=convn[0], fs=convfs,act=T.nnet.relu,stride=(2,2)), # 16 x 16
+        conv_transpose('convT2', input='convT3', nout=convn[0], fs=convfs, act=T.nnet.relu, stride=(2, 2)),  # 32 x 32
+        conv_transpose('convT1', input='convT2', nout=env.num_channels, fs=convfs,act=lambda x:x,stride=(2,2)), # 64 x 64
         
         # actor policy
         fc('pi_act', input='h1', nout=env.nactions * N_latent, act=lambda x:x),
@@ -182,7 +190,8 @@ def main():
                                     latent_features.var(axis=1)])
         # see how well the reconstruction is doing
         st = env.genRandomSample()[0]
-        rt = reconstruct_func([st])[0]
+        rt = reconstruct_func([numpy.float32(st)])[0]
+        print('rt', rt.shape)
         recons.append([st,rt])
 
         policies_stats = numpy.mean(policies,axis=0)
@@ -190,23 +199,23 @@ def main():
         # actual plotting
         pp.clf()
         f, axarr = pp.subplots(2,3,figsize=(19,8))
-        axarr[0,0].imshow(numpy.hstack([recons[-1][0].reshape((env.size,env.size)),
-                                        recons[-1][1].reshape((env.size,env.size))]), interpolation='none')
+        axarr[0,0].imshow(numpy.hstack([255*recons[-1][0].reshape((env.size,env.size, env.num_channels)),
+                                        255*recons[-1][1].reshape((env.size,env.size, env.num_channels))]).astype(np.uint8), interpolation='none')
         slopes_max = max([-slopes.min(), slopes.max()])
         f.colorbar(axarr[1,1].imshow(slopes, interpolation='none', cmap='bwr',vmin=-slopes_max,vmax=slopes_max),
                    ax=axarr[1,1])
         f.colorbar(axarr[1,0].imshow(policies_stats, interpolation='none',cmap='YlOrRd'), ax=axarr[1,0])
         f.colorbar(axarr[0,1].imshow(magnitudes, interpolation='none',cmap='YlOrRd'), ax=axarr[0,1])
         
-        for i in range(nfeat):
-            rf = np.arange(real_features.min(),real_features.max()+1/6.,1./6,'float32')
-            lf = numpy.float32([latent_features[i][np.int32(np.round(real_features[0]*12))==j].mean()
-                                for j in range(-12,8,2)])
-            axarr[0,2].plot(rf, lf)
-            indexes = sorted(range(latent_features.shape[1]), key=lambda x:real_features[1][x])
-            lf = numpy.float32([latent_features[i][np.int32(np.round(real_features[1]*12))==j].mean()
-                                for j in range(-12,8,2)])
-            axarr[1,2].plot(rf, lf)
+        # for i in range(nfeat):
+        #     rf = np.arange(real_features.min(),real_features.max()+1/6.,1./6,'float32')
+        #     lf = numpy.float32([latent_features[i][np.int32(np.round(real_features[0]*12))==j].mean()
+        #                         for j in range(-12,8,2)])
+        #     axarr[0,2].plot(rf, lf)
+        #     indexes = sorted(range(latent_features.shape[1]), key=lambda x:real_features[1][x])
+        #     lf = numpy.float32([latent_features[i][np.int32(np.round(real_features[1]*12))==j].mean()
+        #                         for j in range(-12,8,2)])
+        #     axarr[1,2].plot(rf, lf)
             
         pp.savefig('plots/epoch_%03d.png'%epoch)
     return features, recons
@@ -217,7 +226,9 @@ def train(learn, env, niters):
     losses = []
     for i in range(niters):
         s,a,sp,tf,tf1 = map(numpy.float32, zip(*[env.genRandomSample() for j in range(mbsize)]))
-        losses.append(learn(s,sp,numpy.int32(a)[:,0]))
+        res = learn(s,sp,numpy.int32(a))
+        losses.append([float(res[0]), float(res[1])])
+        print(i, losses[-1])
     return losses
 
 def extract_features(encoder, policy, env, niters):
