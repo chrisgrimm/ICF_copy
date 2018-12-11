@@ -123,18 +123,18 @@ def main(run_path, num_steps_per_epoch, num_epochs, num_latent, mode):
 
         # encoder
         flat2image('s_t_image', input='s_t', shape=(env.num_channels, env.size,env.size)),
-        conv('conv1', input='s_t_image', nout=32, fs=5, act=T.nnet.relu, stride=(2,2)), # 32 x 32 x 32
-        conv('conv2', input='conv1',     nout=64, fs=5, act=T.nnet.relu, stride=(2,2)), # 16 x 16 x 64
-        conv('conv3', input='conv2', nout=64, fs=5, act=T.nnet.relu, stride=(2, 2)),  # 8 x 8 x 64
+        conv('conv1', input='s_t_image', nout=32, fs=3, act=T.nnet.relu, stride=(2,2)), # 32 x 32 x 32
+        conv('conv2', input='conv1',     nout=64, fs=3, act=T.nnet.relu, stride=(2,2)), # 16 x 16 x 64
+        conv('conv3', input='conv2', nout=64, fs=3, act=T.nnet.relu, stride=(2, 2)),  # 8 x 8 x 64
 
         image2flat('conv3_flat', input='conv3'),
         fc('h1', input='conv3_flat', nout=nhid, act=T.nnet.relu),
         fc('h', input='h1', nout=N_latent, act=T.tanh),
 
         # decoder
-        conv_transpose('convT3', input='conv3', nout=64, fs=5, act=T.nnet.relu,stride=(2,2)), # 16 x 16 x 64
-        conv_transpose('convT2', input='convT3', nout=32, fs=5, act=T.nnet.relu, stride=(2, 2)),  # 32 x 32 x 32
-        conv_transpose('convT1', input='convT2', nout=env.num_channels, fs=5, act=lambda x:x,stride=(2,2)), # 64 x 64 x 3
+        conv_transpose('convT3', input='conv3', nout=64, fs=3, act=T.nnet.relu,stride=(2,2)), # 16 x 16 x 64
+        conv_transpose('convT2', input='convT3', nout=32, fs=3, act=T.nnet.relu, stride=(2, 2)),  # 32 x 32 x 32
+        conv_transpose('convT1', input='convT2', nout=env.num_channels, fs=3, act=lambda x:x,stride=(2,2)), # 64 x 64 x 3
         
         # actor policy
         fc('pi_act', input='h1', nout=env.nactions * N_latent, act=lambda x:x),
@@ -256,7 +256,7 @@ def main(run_path, num_steps_per_epoch, num_epochs, num_latent, mode):
         #                         for j in range(-12,8,2)])
         #     axarr[1,2].plot(rf, lf)
 
-        pp.savefig('plots/epoch_%03d.png'%epoch)
+        pp.savefig(os.path.join(run_path, 'plots/epoch_%03d.png'%epoch))
     return features, recons
 
 
@@ -299,7 +299,9 @@ if __name__ == '__main__':
 
     build_directory_structure('.',
         {args.run_dir:
-            {args.name: {}}
+            {args.name:
+                 {'plots': {}}
+            }
         })
     run_path = os.path.join(args.run_dir, args.name)
     main(run_path, args.num_steps_per_epoch, args.num_epochs, args.num_latent, mode=args.mode)
