@@ -2,7 +2,12 @@ import time
 import numpy
 import numpy as np
 from numpy.random import randint
-
+import argparse, os
+import dill as pickle
+from utils import build_directory_structure, add_implicit_name_arg
+from envs.atari.atari_wrapper import PacmanWrapper, AssaultWrapper, SeaquestWrapper
+from replay_buffer import StateReplayBuffer
+import tqdm
 import theano
 import theano.tensor as T
 theano.config.floatX = 'float32'
@@ -69,15 +74,44 @@ class Sokoban:
         pos_p = self.get_agent_pos()
         return s.flatten() / 255., random_action, sp.flatten() / 255., pos, pos_p
 
+class AtariWrapperICF(object):
+    def __init__(self, name, state_buffer_size=10000):
+        self.size=64
+        self.num_channels = 9
+        name_to_game = {'pacman': PacmanWrapper,
+                        'assault': AssaultWrapper,
+                        'seaquest': SeaquestWrapper}
+        if name not in name_to_game:
+            raise Exception(f'Could not match game: {name}.')
+        self.env = name_to_game[name]()
+        self.nactions = self.env.action_space.n
+        self.state_buffer = StateReplayBuffer(state_buffer_size)
+        self.build_state_buffer()
+
+    def build_state_buffer(self):
+        print(f'Generating state buffer...')
+        s = self.env.reset()
+        for i in tqdm.tqdm(range(self.state_buffer.capacity)):
+            sp, r, t, info = self.env.step(np.random.randint(0, self.env.action_space.n))
+            self.state_buffer.append(self.env.get_current_state())
+        print(f'Done!')
+
+    def genRandomSample(self):
+        random_action = np.random.randint(0, self.env.action_space.n)
+        sample = self.state_buffer.sample(1)[0]
+        s = self.env.restore_state(sample)
+        sp, r, t, info = self.env.step(random_action)
+        return s.flatten() / 255., random_action, sp.flatten() / 255., None, None
 
 
 
-def main():
+
+def main(run_path, num_steps_per_epoch, num_epochs, num_latent, mode):
 
     #env = Squares(1,12,2)
-    env = Sokoban()
-    N_latent = 6 # number of latent ICF
-    convn = [16,16,16] # number of hidden conv channels
+    #env = Sokoban()
+    env = AtariWrapperICF(mode.lower())
+    N_latent = num_latent # number of latent ICF
     convfs = 3 # filter size
     nhid = 32 # number of fc hidden
     rec_factor = 0.1 # factor of the reconstruction loss
@@ -89,18 +123,18 @@ def main():
 
         # encoder
         flat2image('s_t_image', input='s_t', shape=(env.num_channels, env.size,env.size)),
-        conv('conv1', input='s_t_image', nout=convn[0], fs=convfs, act=T.nnet.relu, stride=(2,2)), # 32 x 32
-        conv('conv2', input='conv1',     nout=convn[1], fs=convfs, act=T.nnet.relu, stride=(2,2)), # 16 x 16
-        conv('conv3', input='conv2', nout=convn[2], fs=convfs, act=T.nnet.relu, stride=(2, 2)),  # 8 x 8
+        conv('conv1', input='s_t_image', nout=32, fs=5, act=T.nnet.relu, stride=(2,2)), # 32 x 32 x 32
+        conv('conv2', input='conv1',     nout=64, fs=5, act=T.nnet.relu, stride=(2,2)), # 16 x 16 x 64
+        conv('conv3', input='conv2', nout=64, fs=5, act=T.nnet.relu, stride=(2, 2)),  # 8 x 8 x 64
 
         image2flat('conv3_flat', input='conv3'),
         fc('h1', input='conv3_flat', nout=nhid, act=T.nnet.relu),
         fc('h', input='h1', nout=N_latent, act=T.tanh),
 
         # decoder
-        conv_transpose('convT3', input='conv3', nout=convn[0], fs=convfs,act=T.nnet.relu,stride=(2,2)), # 16 x 16
-        conv_transpose('convT2', input='convT3', nout=convn[0], fs=convfs, act=T.nnet.relu, stride=(2, 2)),  # 32 x 32
-        conv_transpose('convT1', input='convT2', nout=env.num_channels, fs=convfs,act=lambda x:x,stride=(2,2)), # 64 x 64
+        conv_transpose('convT3', input='conv3', nout=64, fs=5, act=T.nnet.relu,stride=(2,2)), # 16 x 16 x 64
+        conv_transpose('convT2', input='convT3', nout=32, fs=5, act=T.nnet.relu, stride=(2, 2)),  # 32 x 32 x 32
+        conv_transpose('convT1', input='convT2', nout=env.num_channels, fs=5, act=lambda x:x,stride=(2,2)), # 64 x 64 x 3
         
         # actor policy
         fc('pi_act', input='h1', nout=env.nactions * N_latent, act=lambda x:x),
@@ -156,22 +190,27 @@ def main():
     policy_func = theano.function([st], pi_act)
 
 
+
     ### training
     all_losses = []
     features = []
     recons = []
-    for epoch in range(20):
+    for epoch in range(num_epochs):
         # train
-        losses = train(learn_func, env, 500)
+        losses = train(learn_func, env, epoch, num_steps_per_epoch)
+        with open(os.path.join(run_path, 'policy.pickle'), 'wb') as f:
+            pickle.dump(policy_func, f)
+
         # decay lr
-        lr.set_value(numpy.float32(lr.get_value() * 0.99))
+        lr.set_value(numpy.float32(lr.get_value() * 0.998))
         print(epoch, map(numpy.mean,zip(*losses)))
         all_losses += losses
 
-        # plotting
+        #plotting
         latent_features, real_features, policies = extract_features(encode_func, policy_func, env, 200)
+
         features.append([latent_features, real_features])
-        
+
         ntrue = len(real_features[0])
         nfeat = N_latent
         feat = numpy.concatenate((latent_features,real_features),axis=1).T
@@ -181,32 +220,32 @@ def main():
 
         # do a linear regression to get the coefficients and plot them
         # to see how the real features correlate with the learned latent features
-        slopes = numpy.float32([
-            [scipy.stats.linregress(real, lat).slope
-             for real in real_features]
-            for lat in latent_features])
-        magnitudes = numpy.float32([abs(latent_features).mean(axis=1),
-                                    latent_features.mean(axis=1),
-                                    latent_features.var(axis=1)])
+        # slopes = numpy.float32([
+        #     [scipy.stats.linregress(real, lat).slope
+        #      for real in real_features]
+        #     for lat in latent_features])
+        # magnitudes = numpy.float32([abs(latent_features).mean(axis=1),
+        #                             latent_features.mean(axis=1),
+        #                             latent_features.var(axis=1)])
         # see how well the reconstruction is doing
         st = env.genRandomSample()[0]
         rt = reconstruct_func([numpy.float32(st)])[0]
         print('rt', rt.shape)
         recons.append([st,rt])
 
-        policies_stats = numpy.mean(policies,axis=0)
+        # policies_stats = numpy.mean(policies,axis=0)
 
         # actual plotting
         pp.clf()
         f, axarr = pp.subplots(2,3,figsize=(19,8))
-        axarr[0,0].imshow(numpy.hstack([255*recons[-1][0].reshape((env.size,env.size, env.num_channels)),
-                                        255*recons[-1][1].reshape((env.size,env.size, env.num_channels))]).astype(np.uint8), interpolation='none')
-        slopes_max = max([-slopes.min(), slopes.max()])
-        f.colorbar(axarr[1,1].imshow(slopes, interpolation='none', cmap='bwr',vmin=-slopes_max,vmax=slopes_max),
-                   ax=axarr[1,1])
-        f.colorbar(axarr[1,0].imshow(policies_stats, interpolation='none',cmap='YlOrRd'), ax=axarr[1,0])
-        f.colorbar(axarr[0,1].imshow(magnitudes, interpolation='none',cmap='YlOrRd'), ax=axarr[0,1])
-        
+        axarr[0,0].imshow(numpy.hstack([255*recons[-1][0].reshape((env.size,env.size, env.num_channels))[:, :, -3:],
+                                        255*recons[-1][1].reshape((env.size,env.size, env.num_channels))[:, :, -3:]]).astype(np.uint8), interpolation='none')
+        # slopes_max = max([-slopes.min(), slopes.max()])
+        # f.colorbar(axarr[1,1].imshow(slopes, interpolation='none', cmap='bwr',vmin=-slopes_max,vmax=slopes_max),
+        #            ax=axarr[1,1])
+        # f.colorbar(axarr[1,0].imshow(policies_stats, interpolation='none',cmap='YlOrRd'), ax=axarr[1,0])
+        # f.colorbar(axarr[0,1].imshow(magnitudes, interpolation='none',cmap='YlOrRd'), ax=axarr[0,1])
+
         # for i in range(nfeat):
         #     rf = np.arange(real_features.min(),real_features.max()+1/6.,1./6,'float32')
         #     lf = numpy.float32([latent_features[i][np.int32(np.round(real_features[0]*12))==j].mean()
@@ -216,19 +255,19 @@ def main():
         #     lf = numpy.float32([latent_features[i][np.int32(np.round(real_features[1]*12))==j].mean()
         #                         for j in range(-12,8,2)])
         #     axarr[1,2].plot(rf, lf)
-            
+
         pp.savefig('plots/epoch_%03d.png'%epoch)
     return features, recons
 
 
-def train(learn, env, niters):
+def train(learn, env, epoch, niters):
     mbsize = 64
     losses = []
     for i in range(niters):
         s,a,sp,tf,tf1 = map(numpy.float32, zip(*[env.genRandomSample() for j in range(mbsize)]))
         res = learn(s,sp,numpy.int32(a))
         losses.append([float(res[0]), float(res[1])])
-        print(i, losses[-1])
+        print(epoch, i, losses[-1])
     return losses
 
 def extract_features(encoder, policy, env, niters):
@@ -246,4 +285,21 @@ def extract_features(encoder, policy, env, niters):
 
 
 if __name__ == '__main__':
-    main()
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('--run-dir', type=str, required=True)
+    parser.add_argument('--num-steps-per-epoch', type=int, required=True)
+    parser.add_argument('--num-epochs', type=int, required=True)
+    parser.add_argument('--num-latent', type=int, required=True)
+    parser.add_argument('--mode', type=str, choices=['ASSAULT', 'SEAQUEST', 'PACMAN'])
+    add_implicit_name_arg(parser)
+
+    args = parser.parse_args()
+
+    build_directory_structure('.',
+        {args.run_dir:
+            {args.name: {}}
+        })
+    run_path = os.path.join(args.run_dir, args.name)
+    main(run_path, args.num_steps_per_epoch, args.num_epochs, args.num_latent, mode=args.mode)
