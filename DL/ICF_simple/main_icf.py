@@ -12,9 +12,9 @@ import theano
 import theano.tensor as T
 theano.config.floatX = 'float32'
 
-import matplotlib
-matplotlib.use('agg')
-import matplotlib.pyplot as pp
+#import matplotlib
+#matplotlib.use('agg')
+#import matplotlib.pyplot as pp
 
 
 from util import *
@@ -235,7 +235,7 @@ def main(run_path, num_steps_per_epoch, num_epochs, num_latent, mode):
 
         # policies_stats = numpy.mean(policies,axis=0)
 
-        # actual plotting
+        '''# actual plotting
         pp.clf()
         f, axarr = pp.subplots(2,3,figsize=(19,8))
         axarr[0,0].imshow(numpy.hstack([255*recons[-1][0].reshape((env.size,env.size, env.num_channels))[:, :, -3:],
@@ -255,8 +255,7 @@ def main(run_path, num_steps_per_epoch, num_epochs, num_latent, mode):
         #     lf = numpy.float32([latent_features[i][np.int32(np.round(real_features[1]*12))==j].mean()
         #                         for j in range(-12,8,2)])
         #     axarr[1,2].plot(rf, lf)
-
-        pp.savefig(os.path.join(run_path, 'plots/epoch_%03d.png'%epoch))
+        pp.savefig(os.path.join(run_path, 'plots/epoch_%03d.png'%epoch))'''
     return features, recons
 
 
