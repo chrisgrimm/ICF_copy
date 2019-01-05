@@ -197,7 +197,7 @@ def main(run_path, num_steps_per_epoch, num_epochs, num_latent, mode):
     recons = []
     for epoch in range(num_epochs):
         # train
-        losses = train(learn_func, env, epoch, num_steps_per_epoch)
+        losses = train(run_path, learn_func, env, epoch, num_steps_per_epoch)
         with open(os.path.join(run_path, 'policy.pickle'), 'wb') as f:
             pickle.dump(policy_func, f)
 
@@ -259,14 +259,17 @@ def main(run_path, num_steps_per_epoch, num_epochs, num_latent, mode):
     return features, recons
 
 
-def train(learn, env, epoch, niters):
-    mbsize = 64
+def train(run_path, learn, env, epoch, niters):
+    mbsize = 32
     losses = []
     for i in range(niters):
         s,a,sp,tf,tf1 = map(numpy.float32, zip(*[env.genRandomSample() for j in range(mbsize)]))
         res = learn(s,sp,numpy.int32(a))
         losses.append([float(res[0]), float(res[1])])
+        with open(os.path.join(run_path, 'losses.txt'), 'a') as f:
+            f.write(f'{float(res[0])},{float(res[1])}\n')
         print(epoch, i, losses[-1])
+
     return losses
 
 def extract_features(encoder, policy, env, niters):
@@ -303,4 +306,6 @@ if __name__ == '__main__':
             }
         })
     run_path = os.path.join(args.run_dir, args.name)
+    with open(os.path.join(run_path, 'losses.txt'), 'w') as f:
+        pass
     main(run_path, args.num_steps_per_epoch, args.num_epochs, args.num_latent, mode=args.mode)
