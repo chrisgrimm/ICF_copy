@@ -104,6 +104,93 @@ class AtariWrapperICF(object):
         return s.flatten() / 255., random_action, sp.flatten() / 255., None, None
 
 
+def build_model(num_latent, env_num_channels, env_size, env_nactions):
+    N_latent = num_latent  # number of latent ICF
+    convfs = 3  # filter size
+    nhid = 32  # number of fc hidden
+    rec_factor = 0.1  # factor of the reconstruction loss
+    lr = theano.shared(numpy.array(0.0005, 'float32'))
+
+    model = Model()
+    model.build([
+        placeholder('s_t', shape=(None, env_size ** 2 * env_num_channels)),
+
+        # encoder
+        flat2image('s_t_image', input='s_t', shape=(env_num_channels, env_size, env_size)),
+        conv('conv1', input='s_t_image', nout=32, fs=3, act=T.nnet.relu, stride=(2, 2)),  # 32 x 32 x 32
+        conv('conv2', input='conv1', nout=64, fs=3, act=T.nnet.relu, stride=(2, 2)),  # 16 x 16 x 64
+        conv('conv3', input='conv2', nout=64, fs=3, act=T.nnet.relu, stride=(2, 2)),  # 8 x 8 x 64
+
+        image2flat('conv3_flat', input='conv3'),
+        fc('h1', input='conv3_flat', nout=nhid, act=T.nnet.relu),
+        fc('h', input='h1', nout=N_latent, act=T.tanh),
+
+        # decoder
+        conv_transpose('convT3', input='conv3', nout=64, fs=3, act=T.nnet.relu, stride=(2, 2)),  # 16 x 16 x 64
+        conv_transpose('convT2', input='convT3', nout=32, fs=3, act=T.nnet.relu, stride=(2, 2)),  # 32 x 32 x 32
+        conv_transpose('convT1', input='convT2', nout=env_num_channels, fs=3, act=lambda x: x, stride=(2, 2)),
+        # 64 x 64 x 3
+
+        # actor policy
+        fc('pi_act', input='h1', nout=env_nactions * N_latent, act=lambda x: x),
+
+    ])
+
+    ### theano tensors
+    st = T.matrix()
+    stp1 = T.matrix()
+    at = T.ivector()
+
+    ### apply
+    fp_st = model.apply({'s_t': st}, partial=True)
+    fp_stp1 = model.apply({'s_t': stp1}, partial=True)
+
+    # features and reconstruction at time t
+    f_st = fp_st['h']
+    r_st = fp_st['convT1']
+
+    # at time t+1
+    f_stp1 = fp_stp1['h']
+
+    # policies
+    pi_act = T.nnet.softmax(fp_st['pi_act'].reshape((-1, env_nactions))).reshape((-1, N_latent, env_nactions))
+
+    # probabilities of the taken actions
+    prob_act = pi_act[T.arange(st.shape[0]), :, at]
+
+    ### losses
+    reconstruction_loss = T.mean((st.flatten() - r_st.flatten()) ** 2)
+
+    def sample_selectivity(f, fp):
+        return (f - fp) / (1e-4 + T.sum(T.nnet.relu(f - fp), axis=1)[:, None])
+
+    sel = sample_selectivity(f_st, f_stp1)
+    selectivity_of_at = prob_act * sel[:, :N_latent]
+    act_selectivity_loss = -T.mean(selectivity_of_at)
+    total_loss = rec_factor * reconstruction_loss + act_selectivity_loss
+
+    ### theano functions
+    params = model.params
+    gradients = T.grad(total_loss, params)
+    updates = adam()(params, gradients, lr)
+
+    learn_func = theano.function([st, stp1, at], [act_selectivity_loss, reconstruction_loss], updates=updates)
+    encode_func = theano.function([st], f_st)
+    reconstruct_func = theano.function([st], r_st)
+    policy_func = theano.function([st], pi_act)
+    return params, encode_func, policy_func
+
+def store_params(run_path, params):
+    np_params = [param.get_value() for param in params]
+    with open(os.path.join(run_path, 'policy.pickle'), 'wb') as f:
+        pickle.dump(np_params, f)
+
+def load_params(run_path, params):
+    with open(os.path.join(run_path, 'policy.pickle'), 'rb') as f:
+        np_params = pickle.load(f)
+    assert len(np_params) == len(params)
+    for np_param, param in zip(np_params, params):
+        param.set_value(np_param)
 
 
 def main(run_path, num_steps_per_epoch, num_epochs, num_latent, mode):
@@ -198,8 +285,10 @@ def main(run_path, num_steps_per_epoch, num_epochs, num_latent, mode):
     for epoch in range(num_epochs):
         # train
         losses = train(learn_func, env, epoch, num_steps_per_epoch)
-        with open(os.path.join(run_path, 'policy.pickle'), 'wb') as f:
-            pickle.dump(policy_func, f)
+        print('storing params...')
+        store_params(run_path, params)
+        #with open(os.path.join(run_path, 'policy.pickle'), 'wb') as f:
+        #    pickle.dump(policy_func, f)
 
         # decay lr
         lr.set_value(numpy.float32(lr.get_value() * 0.998))
