@@ -1,5 +1,4 @@
-import theano
-import tensorflow as tf 
+import tensorflow as tf
 import dill
 import os
 import numpy as np
@@ -13,6 +12,7 @@ path = '/home/crgrimm/minimal_q_learning/ALL_DATA/icf_data/assault_2reward_1/pol
 #  policy = dill.load(f)
 
 def get_variables(path):
+  import theano
   with open(path, 'rb') as f:
     policy = dill.load(f)
   all_variables = dict()
