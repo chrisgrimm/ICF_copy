@@ -42,7 +42,9 @@ class ICF_Policy(object):
     print(self.all_vars)
     self.var_mapping = self.build_tf_var_mapping(self.all_vars)
     print(list(self.var_mapping.keys()))
-    self.sess = tf.Session()
+    config = tf.ConfigProto(allow_soft_placement=True)
+    config.gpu_options.allow_growth = True
+    self.sess = tf.Session(config=config)
     self.saver = tf.train.Saver(var_list=self.all_vars)
     self.sess.run(tf.variables_initializer(self.all_vars))
 
