@@ -59,7 +59,7 @@ class ICF_Policy(object):
     self.saver.save(self.sess, path)
   
   def restore(self, path):
-    self.saver.restore(self.sess, paht)
+    self.saver.restore(self.sess, path)
 
   def load_from_ICF(self, path):
     icf_vars = get_variables(path)
@@ -125,6 +125,6 @@ if __name__ == '__main__':
     make_command(run_dir, regex, dest_dir)
   else:
     if not os.path.isdir(os.path.join(dest_dir, run_name)):
-      os.mkdir(os.path.join(dest_dir, run_name))
+      os.mkdir(os.path.join(dest_dir, run_name, ))
     convert_theano_to_tf(run_dir, run_name, dest_dir)
       
